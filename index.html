@@ -122,6 +122,7 @@ body[data-phase="reveal"] .dot{background:var(--phos)}
 .console p:last-child{margin-bottom:0}
 .console p::after{content:'';display:inline-block;width:.55em;height:1em;vertical-align:-.15em;background:var(--phos);margin-left:2px;animation:caret 1s steps(2,end) infinite}
 .console p.done::after{display:none}
+.console p.egg{color:rgba(200,255,212,.62)}
 @keyframes caret{0%,49%{opacity:1}50%,100%{opacity:0}}
 
 .display{
@@ -253,9 +254,15 @@ body[data-phase="reveal"] .meter i.on{background:var(--phos)}
   margin:0 0 18px;text-shadow:var(--glow);text-transform:uppercase;
 }
 .greet .msg{line-height:1.06}
-.reveal-meta{margin:6px 0 26px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:rgba(200,255,212,.7)}
+.reveal-meta{margin:6px 0 6px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:rgba(200,255,212,.7)}
 .reveal-meta::before{content:'// ';color:var(--phos)}
 .reveal-meta:empty::before{content:none}
+.reveal-stats{
+  margin:0 0 26px;font-size:12px;line-height:1.7;letter-spacing:.14em;text-transform:uppercase;
+  color:rgba(200,255,212,.7);
+}
+.reveal-stats::before{content:'> ';color:var(--phos)}
+.reveal-stats:empty::before{content:none}
 .debris{position:fixed;inset:0;z-index:6;pointer-events:none;overflow:hidden}
 .chip{
   position:fixed;font:600 19px/1 var(--mono);color:var(--phos);
@@ -361,6 +368,7 @@ noscript .nojs{
     <h1 class="greet" id="greet" aria-label="¡Feliz cumpleaños, Camila!"></h1>
     <p class="sub" id="reveal-sub" aria-live="polite"></p>
     <p class="reveal-meta" id="reveal-meta"></p>
+    <p class="reveal-stats" id="reveal-stats"></p>
     <button class="btn" type="button" id="btn-restart" hidden>&gt; reiniciar sesión</button>
   </section>
 
@@ -387,6 +395,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, fast ? Math.min(ms, 70) : 
 
 let phase = 'boot';
 let fast = false;
+const t0 = Date.now();          /* cronómetro del hackeo: arranca al cargar */
+let solvedAt = 0;               /* instante en que la defensa cede (ms desde t0) */
 
 function setPhase(p) {
   phase = p;
@@ -394,6 +404,7 @@ function setPhase(p) {
   const labels = { boot: 'Conectando', alert: 'Intrusión activa', puzzle: 'Defensa en curso', reveal: 'Acceso concedido' };
   $('#phase-label').textContent = labels[p];
   setRain(p === 'boot' ? 0.95 : p === 'alert' ? 0.5 : p === 'puzzle' ? 0.26 : 0.6);
+  if (RM && p === 'reveal') drawGhost();   /* sin bucle: fantasma estático */
 }
 
 function typeInto(el, text, speed) {
@@ -482,11 +493,38 @@ const cv = $('#rain');
 const ctx = cv.getContext('2d', { alpha: false });
 let W = 0, H = 0, fontSize = 18, cols = [], raf = 0;
 let intensity = 0.95, target = 0.95, running = false;
+let dpr = 1;
+
+/* Fantasma CAMILA: máscara offscreen (letras) + capa de lluvia recortada.
+   Ambas se dimensionan SOLO al cargar / redimensionar; por frame solo hay
+   blits, ninguna asignación. */
+const maskCv = document.createElement('canvas');
+const maskCtx = maskCv.getContext('2d');
+const layerCv = document.createElement('canvas');
+const layerCtx = layerCv.getContext('2d');
 
 function setRain(v) { target = v; }
 
+function sizeCamila() {
+  maskCv.width = cv.width;  maskCv.height = cv.height;
+  layerCv.width = cv.width; layerCv.height = cv.height;
+  maskCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  layerCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  maskCtx.clearRect(0, 0, W, H);
+  const word = 'CAMILA';
+  let size = 120;
+  maskCtx.font = size + 'px "VT323", ui-monospace, monospace';
+  const w = maskCtx.measureText(word).width || 1;
+  size = Math.min(size * (W * 0.9) / w, H * 0.6);   /* ancho de pantalla, cabe a 360px */
+  maskCtx.font = size + 'px "VT323", ui-monospace, monospace';
+  maskCtx.textAlign = 'center';
+  maskCtx.textBaseline = 'middle';
+  maskCtx.fillStyle = '#0B3D0E';                     /* fósforo profundo: fantasma */
+  maskCtx.fillText(word, W / 2, H * 0.47);           /* banda del saludo */
+}
+
 function sizeRain() {
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  dpr = Math.min(2, window.devicePixelRatio || 1);
   W = window.innerWidth;
   H = window.innerHeight;
   cv.width = Math.floor(W * dpr);
@@ -505,6 +543,7 @@ function sizeRain() {
   }));
   ctx.font = fontSize + 'px "VT323", ui-monospace, monospace';
   ctx.textBaseline = 'top';
+  sizeCamila();
 }
 
 function paintStatic() {
@@ -520,6 +559,41 @@ function paintStatic() {
   }
 }
 
+/* Solo en reveal: base de fósforo profundo + los dígitos QUE YA CAEN,
+   recortados por la máscara CAMILA y vuelcos con source-over (composición
+   acotada: nada se acumula hasta el blanco). Fuera de las letras la lluvia
+   sigue intacta; el saludo (DOM) siempre va por encima. */
+function drawGhost() {
+  if (phase !== 'reveal' || !maskCv.width || !W) return;
+  layerCtx.globalCompositeOperation = 'source-over';
+  layerCtx.clearRect(0, 0, W, H);
+  layerCtx.globalAlpha = 0.55;
+  layerCtx.drawImage(maskCv, 0, 0, W, H);          /* forma en verde muerto */
+  layerCtx.globalAlpha = 1;
+  layerCtx.font = fontSize + 'px "VT323", ui-monospace, monospace';
+  layerCtx.textBaseline = 'top';
+  if (RM) {                                        /* sin bucle: campo fijo */
+    for (let x = 0; x < W; x += fontSize) {
+      for (let y = 0; y < H; y += fontSize) {
+        if (Math.random() < 0.45) {
+          layerCtx.fillStyle = 'rgba(0,255,65,.8)';
+          layerCtx.fillText(Math.random() < 0.5 ? '0' : '1', x, y);
+        }
+      }
+    }
+  } else {                                          /* los dígitos vivos */
+    for (const c of cols) {
+      if (c.py === undefined || c.py < -fontSize || c.py > H) continue;
+      layerCtx.fillStyle = c.col;
+      layerCtx.fillText(c.ch, c.i * fontSize, c.py);
+    }
+  }
+  layerCtx.globalCompositeOperation = 'destination-in';
+  layerCtx.drawImage(maskCv, 0, 0, W, H);          /* dentro de las letras */
+  layerCtx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(layerCv, 0, 0, W, H);
+}
+
 function frame() {
   intensity += (target - intensity) * 0.05;
   ctx.fillStyle = 'rgba(0,0,0,' + (0.15 + (1 - intensity) * 0.28).toFixed(3) + ')';
@@ -528,14 +602,18 @@ function frame() {
   ctx.font = fontSize + 'px "VT323", ui-monospace, monospace';
   for (const c of cols) {
     const head = Math.random() < 0.05;
-    ctx.fillStyle = head ? '#FFFFFF' : (Math.random() < 0.25 ? '#C8FFD4' : '#00FF41');
+    const col = head ? '#FFFFFF' : (Math.random() < 0.25 ? '#C8FFD4' : '#00FF41');
+    const ch = Math.random() < 0.5 ? '0' : '1';
+    ctx.fillStyle = col;
     if (head) { ctx.shadowColor = 'rgba(0,255,65,.95)'; ctx.shadowBlur = 9; } else { ctx.shadowBlur = 0; }
-    ctx.fillText(Math.random() < 0.5 ? '0' : '1', c.i * fontSize, c.y);
+    ctx.fillText(ch, c.i * fontSize, c.y);
+    c.ch = ch; c.col = col; c.py = c.y;            /* rastro para el fantasma */
     c.y += c.v * fontSize * 0.42;
     if (c.y > H + 40) { c.y = -Math.random() * H * 0.7; c.v = 0.5 + Math.random() * 1.3; }
   }
   ctx.shadowBlur = 0;
   ctx.globalAlpha = 1;
+  drawGhost();
   raf = requestAnimationFrame(frame);
 }
 
@@ -553,7 +631,10 @@ document.addEventListener('visibilitychange', () => {
 let rz;
 window.addEventListener('resize', () => {
   clearTimeout(rz);
-  rz = setTimeout(() => { sizeRain(); if (RM) paintStatic(); }, 150);
+  rz = setTimeout(() => {
+    sizeRain();
+    if (RM) { paintStatic(); if (phase === 'reveal') drawGhost(); }
+  }, 150);
 });
 
 /* =========================================================
@@ -720,6 +801,7 @@ function checkWin() {
     return false;
   }
   if (values.join('') === SOLU) {
+    solvedAt = Date.now() - t0;
     sys('verificando 81 celdas… defensa superada', 'ok');
     setTimeout(() => reveal('solved'), RM ? 0 : 750);
     return true;
@@ -743,6 +825,39 @@ function giveHint() {
   const [r, c] = idxRC(i);
   sys('pista inyectada · fila ' + (r + 1) + ' · columna ' + (c + 1) + ' = ' + SOLU[i], 'ok');
   checkWin();
+}
+
+/* =========================================================
+   3b · ESTADÍSTICAS + RÉCORD (solo victoria; todo en try/catch)
+   ========================================================= */
+function fmtTime(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+}
+
+function readRecord() {
+  try {
+    const n = Number(window.localStorage.getItem('camila-hack-record'));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch (e) { return 0; }   /* modo privado / file:// sin storage */
+}
+
+function writeRecord(ms) {
+  try { window.localStorage.setItem('camila-hack-record', String(ms)); }
+  catch (e) { /* sin storage: la partida sigue siendo válida */ }
+}
+
+function statsLine() {
+  const parts = ['hackeada en ' + fmtTime(solvedAt)];
+  parts.push(hints === 0 ? 'sin pistas' : 'pistas: ' + hints);
+  parts.push('sin rendirse');
+  const prev = readRecord();
+  if (!prev) writeRecord(solvedAt);
+  else if (solvedAt < prev) {
+    parts.push('¡nuevo récord! (anterior ' + fmtTime(prev) + ')');
+    writeRecord(solvedAt);
+  } else parts.push('récord: ' + fmtTime(prev));
+  return parts.join(' · ');
 }
 
 /* =========================================================
@@ -820,6 +935,7 @@ async function reveal(mode) {
       $('#reveal-meta').textContent = mode === 'solved'
         ? 'el mensaje estaba dentro del sudoku desde el principio'
         : '81 celdas, un regalo, cero condiciones';
+      if (mode === 'solved') $('#reveal-stats').textContent = statsLine();
       $('#btn-restart').hidden = false;
       $('#btn-restart').classList.add('entering');
     });
@@ -887,9 +1003,34 @@ async function run() {
 /* =========================================================
    6 · EVENTOS
    ========================================================= */
+/* huevos de pascua de teclado físico — solo boot/alert (antes del sudoku) */
+const REPLIES = {
+  help:    '> ayuda desplegada: solo hay un camino — el sudoku.',
+  hola:    '> nadie debería ver esta consola. pero aquí estás. hola.',
+  cumples: '> cumpleaños.exe: denegado. primero demuestra tu valía.',
+  camila:  '> agente Camila verificado. tendrás que ganarte la salida.'
+};
+let eggBuf = '';
+
+function secretReply(text) {
+  const con = $('#console');
+  const p = document.createElement('p');
+  p.className = 'egg';
+  con.appendChild(p);
+  const eggs = con.querySelectorAll('p.egg');
+  for (let i = 0; i < eggs.length - 4; i++) eggs[i].remove();   /* techo de 4 líneas */
+  typeInto(p, text, 24).then(() => p.classList.add('done'));
+}
+
 function onKey(e) {
-  if ((phase === 'boot' || phase === 'alert') && (e.key === 'Enter' || e.key === ' ')) {
-    fast = true;
+  if (phase === 'boot' || phase === 'alert') {
+    if (e.key === 'Enter' || e.key === ' ') { fast = true; return; }
+    if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key && e.key.length === 1 && /[a-z]/i.test(e.key)) {
+      eggBuf = (eggBuf + e.key.toLowerCase()).slice(-16);
+      for (const w of Object.keys(REPLIES)) {
+        if (eggBuf.endsWith(w)) { eggBuf = ''; secretReply(REPLIES[w]); break; }
+      }
+    }
     return;
   }
   if (phase !== 'puzzle') return;
@@ -957,6 +1098,12 @@ function bind() {
    7 · ARRANQUE
    ========================================================= */
 startRain();
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => {          /* la máscara mide con VT323 real */
+    sizeCamila();
+    if (RM && phase === 'reveal') drawGhost();
+  });
+}
 tickClock();
 setInterval(tickClock, 1000);
 bind();

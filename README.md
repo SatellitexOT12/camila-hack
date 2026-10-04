@@ -12,7 +12,13 @@ detiene el "hack" y revela **¡Feliz cumpleaños, Camila!**
    solo con singles). Teclado con flechas y dígitos, retroceso, **PISTA** y
    **RENDIRSE** con doble confirmación (camino alternativo: nunca hay callejón sin salida).
 3. **Revelación** — las fichas del tablero vuelan y los dígitos se destraban
-   carácter a carácter hasta el saludo completo + botón para reiniciar.
+   carácter a carácter hasta el saludo completo + botón para reiniciar. La lluvia
+   del fondo se enmascara con el nombre **CAMILA** detrás del saludo.
+
+**Trucos ocultos:** durante la intro, teclea en el teclado físico `help`, `hola`,
+`cumples` o `camila` y la consola responde. Al ganar verás tus estadísticas
+(`hackeada en 3m 42s · sin pistas · sin rendirse`) y tu récord se guarda en el
+navegador (`localStorage`) para batirlo en la siguiente partida.
 
 ## Detalles técnicos
 
