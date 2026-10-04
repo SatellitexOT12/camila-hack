@@ -1,0 +1,10 @@
+# Harness de desarrollo (impeccable) — no forma parte del sitio publicado
+.impeccable/
+.gh-auth.log
+
+# Dependencias / utilidades locales
+node_modules/
+
+# SO
+.DS_Store
+Thumbs.db

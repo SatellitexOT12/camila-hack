@@ -1,0 +1,968 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Camila // acceso comprometido</title>
+<meta name="description" content="Terminal de intrusión. Resuelve el sudoku para recuperar el control del sistema.">
+<meta name="theme-color" content="#000000">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23000'/%3E%3Ctext x='16' y='24' font-family='monospace' font-size='22' font-weight='700' fill='%2300FF41' text-anchor='middle'%3E0%3C/text%3E%3C/svg%3E">
+<style>
+/* ============================================================
+   FUENTES — auto-hospedadas, la página funciona sin red
+   ============================================================ */
+@font-face{
+  font-family:'VT323';font-style:normal;font-weight:400;font-display:swap;
+  src:url('assets/fonts/vt323.woff2') format('woff2');
+}
+@font-face{
+  font-family:'IBM Plex Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('assets/fonts/plexmono-400.woff2') format('woff2');
+}
+@font-face{
+  font-family:'IBM Plex Mono';font-style:normal;font-weight:600;font-display:swap;
+  src:url('assets/fonts/plexmono-600.woff2') format('woff2');
+}
+
+/* ============================================================
+   TOKENS — fósforo sobre negro CRT
+   ============================================================ */
+:root{
+  --bg:#000000;
+  --phos:#00FF41;          /* vida del sistema */
+  --phos-deep:#0B3D0E;     /* verde muerto */
+  --pale:#C8FFD4;          /* texto largo */
+  --amber:#FFD23F;         /* solo la celda viva */
+  --alarm:#FF4646;         /* solo conflicto / alarma */
+  --line:rgba(0,255,65,.26);
+  --line-strong:rgba(0,255,65,.62);
+  --crt:'VT323',ui-monospace,'Cascadia Mono',Consolas,monospace;
+  --mono:'IBM Plex Mono',ui-monospace,'Cascadia Mono',Consolas,monospace;
+  --glow:0 0 4px rgba(0,255,65,.8),0 0 16px rgba(0,255,65,.42);
+  --bar-h:44px;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{background:var(--bg);scrollbar-color:var(--phos-deep) #000;scrollbar-width:thin}
+body{
+  margin:0;min-height:100dvh;background:var(--bg);color:var(--pale);
+  font:400 15px/1.6 var(--mono);
+  display:flex;flex-direction:column;overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+::selection{background:var(--phos);color:#000}
+:focus-visible{outline:2px solid var(--phos);outline-offset:2px}
+button{font-family:inherit}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:#000}
+::-webkit-scrollbar-thumb{background:var(--phos-deep);border:1px solid rgba(0,255,65,.35)}
+::-webkit-scrollbar-thumb:hover{background:#12551f}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* ============================================================
+   LLUVIA + CAPA CRT
+   ============================================================ */
+#rain{position:fixed;inset:0;z-index:0;display:block;background:#000}
+.crt{
+  position:fixed;inset:0;z-index:7;pointer-events:none;
+  background:
+    repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0 2px,rgba(0,0,0,.30) 2px 3px),
+    radial-gradient(125% 95% at 50% 50%,transparent 52%,rgba(0,0,0,.72) 100%);
+  animation:crtBreathe 7s steps(60,end) infinite;
+}
+@keyframes crtBreathe{0%,100%{opacity:1}46%{opacity:.95}48%{opacity:1}92%{opacity:.97}}
+
+/* ============================================================
+   BARRA DE ESTADO / PLACA
+   ============================================================ */
+.bar,.plate{
+  position:relative;z-index:5;background:#000;
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:0 16px;font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+  color:rgba(200,255,212,.78);
+}
+.bar{height:var(--bar-h);border-bottom:1px solid var(--line);flex:0 0 auto}
+.plate{min-height:36px;padding-top:6px;padding-bottom:calc(6px + env(safe-area-inset-bottom));border-top:1px solid var(--line);flex:0 0 auto}
+.bar-l,.bar-r{display:flex;align-items:center;gap:10px;min-width:0}
+.bar span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#phase-label{color:var(--phos)}
+#clock{font-variant-numeric:tabular-nums;color:var(--pale)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--alarm);flex:0 0 auto}
+body[data-phase="reveal"] .dot{background:var(--phos)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+/* ============================================================
+   ESCENARIO
+   ============================================================ */
+.stage{
+  position:relative;z-index:2;flex:1 1 auto;
+  display:grid;place-items:center;align-items:center;
+  padding:20px 12px;width:100%;
+  animation:powerOn .75s cubic-bezier(.2,.9,.25,1) both;
+}
+@keyframes powerOn{
+  0%{transform:scaleY(.004);opacity:0;filter:brightness(4)}
+  38%{transform:scaleY(.03);opacity:1;filter:brightness(2.2)}
+  100%{transform:scaleY(1);opacity:1;filter:brightness(1)}
+}
+.act{width:100%;max-width:44rem;text-align:center}
+#act-reveal{max-width:62rem}
+.act.entering{animation:enter .5s cubic-bezier(.16,.84,.28,1) both}
+@keyframes enter{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+.act.leaving{opacity:0;transform:translateY(-10px);filter:blur(3px);transition:opacity .28s ease,transform .28s ease,filter .28s ease}
+
+/* ---------- consola de arranque ---------- */
+.console{
+  text-align:left;border:1px solid var(--line);background:rgba(0,10,3,.72);
+  padding:14px 16px;margin:0 auto 26px;max-width:34rem;
+  box-shadow:0 0 0 1px rgba(0,0,0,.6);
+}
+.console p{margin:0 0 4px;font-size:13.5px;color:rgba(200,255,212,.9);overflow-wrap:break-word}
+.console p:last-child{margin-bottom:0}
+.console p::after{content:'';display:inline-block;width:.55em;height:1em;vertical-align:-.15em;background:var(--phos);margin-left:2px;animation:caret 1s steps(2,end) infinite}
+.console p.done::after{display:none}
+@keyframes caret{0%,49%{opacity:1}50%,100%{opacity:0}}
+
+.display{
+  font-family:var(--crt);font-weight:400;color:var(--phos);
+  font-size:clamp(3rem,12vw,6rem);line-height:.98;letter-spacing:.02em;
+  margin:0 0 14px;text-shadow:var(--glow);
+  text-transform:uppercase;
+}
+#alert-title{min-height:1.05em}
+.sub{
+  margin:0;color:var(--pale);font-size:clamp(.95rem,2.6vw,1.1rem);
+  min-height:1.6em;text-align:center;
+}
+.sub::before{content:'> ';color:var(--phos)}
+.sub:empty::before{display:none}
+.skip{margin:26px 0 0;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(200,255,212,.55)}
+
+/* mensaje que se decodifica (dígitos → letras) */
+.msg{display:block}
+.word{display:inline-block;white-space:nowrap}
+.dch{display:inline-block}
+.dch.locked{animation:lockPop .32s cubic-bezier(.2,.9,.3,1) both}
+@keyframes lockPop{
+  0%{transform:scale(1.22);text-shadow:0 0 22px rgba(0,255,65,.95)}
+  100%{transform:scale(1);text-shadow:inherit}
+}
+
+/* ============================================================
+   MÓDULO SUDOKU
+   ============================================================ */
+.module{
+  width:100%;max-width:calc(50px * 9 + 28px);margin:0 auto;text-align:left;
+  border:1px solid var(--line-strong);background:rgba(0,8,2,.93);
+  padding:12px;position:relative;
+}
+.module::before,.module::after{
+  content:'';position:absolute;width:9px;height:9px;border:1px solid var(--phos);opacity:.85
+}
+.module::before{top:-1px;left:-1px;border-right:0;border-bottom:0}
+.module::after{bottom:-1px;right:-1px;border-left:0;border-top:0}
+.module-head{
+  display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+  font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:rgba(200,255,212,.82);
+  padding-bottom:10px;margin-bottom:12px;border-bottom:1px solid var(--line);
+}
+.mh-r{display:flex;align-items:center;gap:8px;color:var(--alarm)}
+body[data-phase="reveal"] .mh-r{color:var(--phos)}
+.meter{display:inline-flex;gap:2px}
+.meter i{width:7px;height:11px;background:rgba(255,70,70,.18);display:block}
+.meter i.on{background:var(--alarm)}
+body[data-phase="reveal"] .meter i{background:rgba(0,255,65,.16)}
+body[data-phase="reveal"] .meter i.on{background:var(--phos)}
+
+/* ---------- rejilla ---------- */
+.grid{
+  --cell:min(calc((100vw - 72px) / 9),50px);
+  display:grid;grid-template-columns:repeat(9,var(--cell));grid-auto-rows:var(--cell);
+  justify-content:center;border:1px solid var(--line-strong);background:#010503;
+  user-select:none;
+}
+.cell{
+  width:var(--cell);height:var(--cell);
+  display:flex;align-items:center;justify-content:center;
+  border:0;border-right:1px solid var(--line);border-bottom:1px solid var(--line);
+  background:transparent;color:var(--phos);
+  font:600 calc(var(--cell) * .46)/1 var(--mono);font-variant-numeric:tabular-nums;
+  padding:0;cursor:pointer;position:relative;
+  transition:background .12s ease,color .12s ease;
+}
+.cell:last-child{border-right:0}
+.cell.box-r{border-right:1px solid var(--line-strong)}
+.cell.box-b{border-bottom:1px solid var(--line-strong)}
+.cell:nth-last-child(-n+9){border-bottom:0}
+.cell:nth-child(9n){border-right:0}
+.cell.given{color:var(--pale);background:rgba(0,255,65,.05);cursor:default;font-weight:600}
+.cell.filled{color:var(--phos);text-shadow:0 0 8px rgba(0,255,65,.55)}
+.cell:hover:not(.given){background:rgba(0,255,65,.12)}
+.cell.rel{background:rgba(0,255,65,.07)}
+.cell.same{background:rgba(0,255,65,.16)}
+.cell.active{background:rgba(255,210,63,.20);color:var(--amber);box-shadow:inset 0 0 0 1px var(--amber);text-shadow:0 0 10px rgba(255,210,63,.75)}
+.cell.conflict{color:var(--alarm)!important;background:rgba(255,70,70,.16);text-shadow:0 0 9px rgba(255,70,70,.7);animation:shake .3s ease}
+@keyframes shake{0%,100%{transform:none}25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
+.cell.hint{animation:hintFlash .9s ease}
+@keyframes hintFlash{0%{background:rgba(0,255,65,.7);color:#000}100%{background:transparent}}
+
+/* ---------- teclado ---------- */
+.pad{display:grid;grid-template-columns:repeat(9,1fr);gap:6px;margin-top:14px}
+.pad button{
+  aspect-ratio:1;position:relative;border:1px solid var(--line);background:rgba(0,255,65,.05);
+  color:var(--phos);font:600 17px/1 var(--mono);font-variant-numeric:tabular-nums;
+  cursor:pointer;transition:background .14s ease,border-color .14s ease,transform .08s ease;
+}
+.pad button:hover:not(:disabled){background:rgba(0,255,65,.16);border-color:var(--line-strong)}
+.pad button:active:not(:disabled){transform:translateY(1px);background:var(--phos);color:#000;border-color:var(--phos)}
+.pad button i{
+  position:absolute;right:4px;bottom:3px;font:400 11px/1 var(--mono);font-style:normal;
+  color:rgba(200,255,212,.8);
+}
+.pad button:disabled{border-color:rgba(0,255,65,.12);color:rgba(200,255,212,.4);cursor:not-allowed}
+.pad button:disabled i{color:rgba(200,255,212,.4)}
+
+.actions{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:6px}
+.btn{
+  border:1px solid var(--line-strong);background:rgba(0,255,65,.07);color:var(--phos);
+  font:600 11.5px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  padding:13px 8px;cursor:pointer;transition:background .16s ease,color .16s ease,transform .08s ease;
+}
+.btn:hover{background:rgba(0,255,65,.18)}
+.btn:active{transform:translateY(1px)}
+.btn.danger{border-color:rgba(255,70,70,.55);color:#FF8080;background:rgba(255,70,70,.07)}
+.btn.danger:hover{background:rgba(255,70,70,.18);border-color:var(--alarm)}
+.btn.danger.armed{background:var(--alarm);color:#000;border-color:var(--alarm);animation:pulse 1s steps(2,end) infinite}
+
+.sysline{
+  margin:14px 0 0;min-height:3.1em;font-size:13px;line-height:1.55;
+  color:var(--pale);border-top:1px solid var(--line);padding-top:10px;
+}
+.sysline::before{content:'> ';color:var(--phos)}
+.sysline.err{color:#FF8080}
+.sysline.err::before{color:var(--alarm)}
+.sysline.ok{color:var(--phos);text-shadow:var(--glow)}
+
+/* ============================================================
+   REVELACIÓN
+   ============================================================ */
+.greet{
+  font-family:var(--crt);font-weight:400;color:var(--phos);
+  font-size:clamp(2.6rem,11.5vw,6rem);line-height:1.02;letter-spacing:.01em;
+  margin:0 0 18px;text-shadow:var(--glow);text-transform:uppercase;
+}
+.greet .msg{line-height:1.06}
+.reveal-meta{margin:6px 0 26px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:rgba(200,255,212,.7)}
+.reveal-meta::before{content:'// ';color:var(--phos)}
+.reveal-meta:empty::before{content:none}
+.debris{position:fixed;inset:0;z-index:6;pointer-events:none;overflow:hidden}
+.chip{
+  position:fixed;font:600 19px/1 var(--mono);color:var(--phos);
+  text-shadow:0 0 10px rgba(0,255,65,.8);transform:translate(-50%,-50%);
+  opacity:0;font-variant-numeric:tabular-nums;
+}
+#btn-restart{margin-top:4px;padding:14px 22px}
+
+noscript .nojs{
+  display:block;text-align:center;border:1px solid var(--alarm);color:#FF8080;
+  padding:14px;margin-top:20px;font-size:13px
+}
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width:420px){
+  .bar,.plate{letter-spacing:.12em}
+  #phase-label{display:none}
+  .console{padding:12px}
+  .console p{font-size:12.5px}
+  .module{padding:10px}
+  .pad button{font-size:16px}
+  .btn{font-size:11px;letter-spacing:.1em;padding:12px 4px}
+}
+@media (min-width:760px){
+  .stage{padding:36px 24px}
+  .console{margin-bottom:34px}
+}
+
+/* ============================================================
+   MOVIMIENTO REDUCIDO
+   ============================================================ */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+  .stage{animation:none}
+}
+</style>
+</head>
+
+<body data-phase="boot">
+
+<canvas id="rain" aria-hidden="true"></canvas>
+<div class="crt" aria-hidden="true"></div>
+
+<header class="bar">
+  <div class="bar-l">
+    <span class="dot" aria-hidden="true"></span>
+    <span>Sistema · seguridad perimetral</span>
+  </div>
+  <div class="bar-r">
+    <span id="phase-label">Conectando</span>
+    <time id="clock">--:--:--</time>
+  </div>
+</header>
+
+<main class="stage">
+
+  <!-- ============ ACTO 1 — ARRANQUE E INTRUSIÓN ============ -->
+  <section class="act" id="act-alert" aria-label="Arranque del terminal">
+    <div class="console" id="console" aria-live="polite">
+      <p data-type="&gt; abriendo canal seguro con el dispositivo de Camila"></p>
+      <p data-type="&gt; 0x7F3A · paquete de intrusión inyectado"></p>
+      <p data-type="&gt; huella detectada: CAMILA"></p>
+    </div>
+
+    <h1 class="display" id="alert-title" aria-label="Has sido hackeada"></h1>
+    <p class="sub" id="alert-sub" aria-live="polite"></p>
+    <p class="skip" id="skip">&gt; pulsa para acelerar</p>
+
+    <noscript><span class="nojs">&gt; este terminal necesita javascript para funcionar. actívalo y vuelve a cargar.</span></noscript>
+  </section>
+
+  <!-- ============ ACTO 2 — MÓDULO DE DEFENSA ============ -->
+  <section class="act" id="act-sudoku" hidden aria-label="Módulo de defensa sudoku">
+    <div class="module">
+      <div class="module-head">
+        <span class="mh-l">Módulo de defensa · fácil</span>
+        <span class="mh-r">
+          <span class="meter" id="meter" aria-hidden="true">
+            <i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          </span>
+          <span id="integrity-label">Integridad 30 %</span>
+        </span>
+      </div>
+
+      <div class="grid" id="grid" role="group" aria-label="Rejilla de sudoku, 9 por 9"></div>
+
+      <div class="pad" id="pad" role="group" aria-label="Teclado numérico"></div>
+
+      <div class="actions">
+        <button class="btn" type="button" id="btn-clear">Borrar</button>
+        <button class="btn" type="button" id="btn-hint">Pista <span id="hint-count">0</span></button>
+        <button class="btn danger" type="button" id="btn-quit">Rendirse</button>
+      </div>
+
+      <p class="sysline" id="sysline" aria-live="polite">selecciona una celda y teclea un dígito</p>
+    </div>
+  </section>
+
+  <!-- ============ ACTO 3 — REVELACIÓN ============ -->
+  <section class="act" id="act-reveal" hidden aria-label="Feliz cumpleaños">
+    <h1 class="greet" id="greet" aria-label="¡Feliz cumpleaños, Camila!"></h1>
+    <p class="sub" id="reveal-sub" aria-live="polite"></p>
+    <p class="reveal-meta" id="reveal-meta"></p>
+    <button class="btn" type="button" id="btn-restart" hidden>&gt; reiniciar sesión</button>
+  </section>
+
+</main>
+
+<footer class="plate">
+  <span>Canal cifrado</span>
+  <span>0x7F3A // v0.9.4</span>
+</footer>
+
+<div class="debris" id="debris" aria-hidden="true"></div>
+
+<script>
+(function () {
+'use strict';
+
+/* =========================================================
+   0 · UTILIDADES
+   ========================================================= */
+const $ = (s, r = document) => r.querySelector(s);
+const RM = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const randDigit = () => String(Math.floor(Math.random() * 10));
+const wait = (ms) => new Promise((r) => setTimeout(r, fast ? Math.min(ms, 70) : (RM ? 0 : ms)));
+
+let phase = 'boot';
+let fast = false;
+
+function setPhase(p) {
+  phase = p;
+  document.body.dataset.phase = p;
+  const labels = { boot: 'Conectando', alert: 'Intrusión activa', puzzle: 'Defensa en curso', reveal: 'Acceso concedido' };
+  $('#phase-label').textContent = labels[p];
+  setRain(p === 'boot' ? 0.95 : p === 'alert' ? 0.5 : p === 'puzzle' ? 0.26 : 0.6);
+}
+
+function typeInto(el, text, speed) {
+  speed = speed || 20;
+  return new Promise((resolve) => {
+    if (RM || fast) { el.textContent = text; resolve(); return; }
+    el.textContent = '';
+    let i = 0;
+    (function step() {
+      if (fast || i >= text.length) { el.textContent = text; resolve(); return; }
+      el.textContent += text[i++];
+      setTimeout(step, speed);
+    })();
+  });
+}
+
+/* Decodificador: cada carácter nace como dígito y se bloquea en su letra. */
+function decode(el, text, opts) {
+  opts = opts || {};
+  return new Promise((resolve) => {
+    const host = el.querySelector('.msg') || (() => {
+      const s = document.createElement('span');
+      s.className = 'msg';
+      s.setAttribute('aria-hidden', 'true');
+      el.appendChild(s);
+      return s;
+    })();
+    host.textContent = '';
+
+    const chars = Array.from(text);
+    const items = [];
+    let word = null;
+    chars.forEach((ch) => {
+      if (ch === ' ' || ch === '\u00A0') {
+        word = null;
+        host.appendChild(document.createTextNode(' '));
+        return;
+      }
+      if (!word) {
+        word = document.createElement('span');
+        word.className = 'word';
+        host.appendChild(word);
+      }
+      const span = document.createElement('span');
+      span.className = 'dch';
+      span.textContent = (RM || fast) ? ch : (opts.digits ? opts.digits[items.length] || randDigit() : randDigit());
+      word.appendChild(span);
+      items.push({ span, ch, locked: false });
+    });
+
+    if (RM || fast) {
+      items.forEach((it) => { it.span.textContent = it.ch; it.locked = true; it.span.classList.add('locked'); });
+      resolve();
+      return;
+    }
+
+    const flight = opts.flight || 0;
+    const step = opts.step || Math.max(26, (opts.duration || 1100) / Math.max(items.length, 1));
+
+    items.forEach((it, idx) => {
+      const at = flight + idx * step;
+      if (opts.digits) it.span.textContent = opts.digits[idx] || randDigit();
+      let scramble = 0;
+      setTimeout(() => {
+        scramble = setInterval(() => {
+          if (it.locked) { clearInterval(scramble); return; }
+          it.span.textContent = randDigit();
+        }, 55);
+      }, Math.max(0, at - 460));
+      setTimeout(() => {
+        if (scramble) clearInterval(scramble);
+        it.span.textContent = it.ch;
+        it.locked = true;
+        it.span.classList.add('locked');
+      }, at);
+    });
+
+    setTimeout(resolve, flight + items.length * step + 120);
+  });
+}
+
+/* =========================================================
+   1 · LLUVIA DE 0 Y 1
+   ========================================================= */
+const cv = $('#rain');
+const ctx = cv.getContext('2d', { alpha: false });
+let W = 0, H = 0, fontSize = 18, cols = [], raf = 0;
+let intensity = 0.95, target = 0.95, running = false;
+
+function setRain(v) { target = v; }
+
+function sizeRain() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  cv.width = Math.floor(W * dpr);
+  cv.height = Math.floor(H * dpr);
+  cv.style.width = W + 'px';
+  cv.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  fontSize = W < 560 ? 16 : 18;
+  const n = Math.ceil(W / fontSize) + 1;
+  cols = Array.from({ length: n }, (_, i) => ({
+    i,
+    y: Math.random() * -H,
+    v: 0.5 + Math.random() * 1.3
+  }));
+  ctx.font = fontSize + 'px "VT323", ui-monospace, monospace';
+  ctx.textBaseline = 'top';
+}
+
+function paintStatic() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  ctx.font = fontSize + 'px "VT323", ui-monospace, monospace';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = 'rgba(0,255,65,.5)';
+  for (let x = 0; x < W; x += fontSize) {
+    for (let y = 0; y < H; y += fontSize) {
+      if (Math.random() < 0.16) ctx.fillText(Math.random() < 0.5 ? '0' : '1', x, y);
+    }
+  }
+}
+
+function frame() {
+  intensity += (target - intensity) * 0.05;
+  ctx.fillStyle = 'rgba(0,0,0,' + (0.15 + (1 - intensity) * 0.28).toFixed(3) + ')';
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = 0.22 + intensity * 0.78;
+  ctx.font = fontSize + 'px "VT323", ui-monospace, monospace';
+  for (const c of cols) {
+    const head = Math.random() < 0.05;
+    ctx.fillStyle = head ? '#FFFFFF' : (Math.random() < 0.25 ? '#C8FFD4' : '#00FF41');
+    if (head) { ctx.shadowColor = 'rgba(0,255,65,.95)'; ctx.shadowBlur = 9; } else { ctx.shadowBlur = 0; }
+    ctx.fillText(Math.random() < 0.5 ? '0' : '1', c.i * fontSize, c.y);
+    c.y += c.v * fontSize * 0.42;
+    if (c.y > H + 40) { c.y = -Math.random() * H * 0.7; c.v = 0.5 + Math.random() * 1.3; }
+  }
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+  raf = requestAnimationFrame(frame);
+}
+
+function startRain() {
+  sizeRain();
+  if (RM) { paintStatic(); return; }
+  running = true;
+  raf = requestAnimationFrame(frame);
+}
+document.addEventListener('visibilitychange', () => {
+  if (RM) return;
+  if (document.hidden) { cancelAnimationFrame(raf); running = false; }
+  else if (!running) { running = true; raf = requestAnimationFrame(frame); }
+});
+let rz;
+window.addEventListener('resize', () => {
+  clearTimeout(rz);
+  rz = setTimeout(() => { sizeRain(); if (RM) paintStatic(); }, 150);
+});
+
+/* =========================================================
+   2 · RELOJ
+   ========================================================= */
+function tickClock() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  $('#clock').textContent = p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
+/* =========================================================
+   3 · SUDOKU — puzzle verificado: 45 pistas, solución única,
+        resoluble solo con singles, simetría rotacional 180°
+   ========================================================= */
+const PUZZLE = '504008000670190008090302067000761420426853791013924000960507080200019035000200109';
+const SOLU   = '534678912672195348198342567859761423426853791713924856961537284287419635345286179';
+
+let values, cells = [], padBtns = [], active = -1, hints = 0, quitArmed = false, quitTimer = 0;
+
+const idxRC = (i) => [Math.floor(i / 9), i % 9];
+const cellLabel = (i) => {
+  const [r, c] = idxRC(i);
+  const v = values[i];
+  return 'fila ' + (r + 1) + ', columna ' + (c + 1) + ', ' + (v ? (PUZZLE[i] !== '0' ? 'pista ' + v : 'valor ' + v) : 'vacía');
+};
+
+function buildGrid() {
+  const grid = $('#grid');
+  grid.textContent = '';
+  cells = [];
+  values = Array.from(PUZZLE, (ch) => Number(ch));
+  for (let i = 0; i < 81; i++) {
+    const [r, c] = idxRC(i);
+    const given = PUZZLE[i] !== '0';
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cell'
+      + (given ? ' given' : '')
+      + (c === 2 || c === 5 ? ' box-r' : '')
+      + (r === 2 || r === 5 ? ' box-b' : '');
+    b.tabIndex = -1;
+    b.dataset.i = i;
+    b.textContent = given ? PUZZLE[i] : '';
+    b.setAttribute('aria-label', cellLabel(i));
+    grid.appendChild(b);
+    cells.push(b);
+  }
+}
+
+function buildPad() {
+  const pad = $('#pad');
+  pad.textContent = '';
+  padBtns = [];
+  for (let d = 1; d <= 9; d++) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.d = d;
+    b.innerHTML = d + '<i></i>';
+    b.setAttribute('aria-label', 'Escribir ' + d);
+    pad.appendChild(b);
+    padBtns.push(b);
+  }
+  refreshPad();
+}
+
+function counts() {
+  const out = Array(10).fill(0);
+  values.forEach((v) => { if (v) out[v]++; });
+  return out;
+}
+
+function refreshPad() {
+  const c = counts();
+  padBtns.forEach((b, n) => {
+    const left = 9 - c[n + 1];
+    b.querySelector('i').textContent = left;
+    b.disabled = left <= 0;
+  });
+}
+
+function conflicts() {
+  const bad = new Set();
+  const scan = (keyFn) => {
+    const buckets = {};
+    for (let i = 0; i < 81; i++) {
+      if (!values[i]) continue;
+      const k = keyFn(i);
+      if (k === null) continue;
+      (buckets[k] = buckets[k] || []).push(i);
+    }
+    Object.values(buckets).forEach((arr) => {
+      if (arr.length > 1) arr.forEach((i) => bad.add(i));
+    });
+  };
+  for (let r = 0; r < 9; r++) scan((i) => (Math.floor(i / 9) === r ? 'r' + r + 'v' + values[i] : null));
+  for (let c = 0; c < 9; c++) scan((i) => (i % 9 === c ? 'c' + c + 'v' + values[i] : null));
+  for (let br = 0; br < 3; br++) for (let bc = 0; bc < 3; bc++) {
+    scan((i) => {
+      const [r, c] = idxRC(i);
+      return (Math.floor(r / 3) === br && Math.floor(c / 3) === bc) ? 'b' + br + bc + 'v' + values[i] : null;
+    });
+  }
+  return bad;
+}
+
+function paint() {
+  const bad = conflicts();
+  const [ar, ac] = active >= 0 ? idxRC(active) : [-1, -1];
+  const av = active >= 0 ? values[active] : 0;
+  cells.forEach((el, i) => {
+    const [r, c] = idxRC(i);
+    const sameRowCol = active >= 0 && (r === ar || c === ac);
+    const sameBox = active >= 0 && Math.floor(r / 3) === Math.floor(ar / 3) && Math.floor(c / 3) === Math.floor(ac / 3);
+    const sameDigit = av && values[i] === av;
+    el.classList.toggle('active', i === active);
+    el.classList.toggle('rel', i !== active && (sameRowCol || sameBox));
+    el.classList.toggle('same', !!sameDigit && i !== active);
+    el.classList.toggle('conflict', bad.has(i));
+    el.classList.toggle('filled', values[i] !== 0 && PUZZLE[i] === '0');
+    if (el.textContent !== String(values[i] || '')) el.textContent = values[i] || '';
+    el.setAttribute('aria-label', cellLabel(i));
+  });
+  refreshPad();
+  return bad;
+}
+
+function sys(text, kind) {
+  const el = $('#sysline');
+  el.className = 'sysline' + (kind ? ' ' + kind : '');
+  return typeInto(el, text, 16);
+}
+
+function focusCell(i) {
+  if (i < 0) return;
+  active = i;
+  paint();
+  cells[i].tabIndex = 0;
+  cells.forEach((el, n) => { if (n !== i) el.tabIndex = -1; });
+  cells[i].focus({ preventScroll: true });
+}
+
+function firstEmpty() {
+  const i = values.findIndex((v) => v === 0);
+  return i < 0 ? 0 : i;
+}
+
+async function place(i, d) {
+  if (phase !== 'puzzle') return;
+  if (PUZZLE[i] !== '0') { await sys('esa celda está fija, no se puede tocar', 'err'); return; }
+  values[i] = d;
+  if (d === 0) { await sys('celda borrada'); paint(); return; }
+  const [r, c] = idxRC(i);
+  const bad = paint();
+  await sys('dígito ' + d + ' registrado · fila ' + (r + 1) + ' · columna ' + (c + 1), bad.has(i) ? 'err' : '');
+  checkWin();
+}
+
+function checkWin() {
+  if (values.some((v) => v === 0)) return false;
+  const bad = conflicts();
+  if (bad.size) {
+    sys('el patrón no cierra · revisa los destellos rojos', 'err');
+    return false;
+  }
+  if (values.join('') === SOLU) {
+    sys('verificando 81 celdas… defensa superada', 'ok');
+    setTimeout(() => reveal('solved'), RM ? 0 : 750);
+    return true;
+  }
+  sys('el patrón no cierra · revisa los destellos rojos', 'err');
+  return false;
+}
+
+function giveHint() {
+  if (phase !== 'puzzle') return;
+  const empty = [];
+  values.forEach((v, i) => { if (v === 0) empty.push(i); });
+  if (!empty.length) return;
+  const i = empty[Math.floor(Math.random() * empty.length)];
+  values[i] = Number(SOLU[i]);
+  hints++;
+  $('#hint-count').textContent = hints;
+  paint();
+  cells[i].classList.add('hint');
+  setTimeout(() => cells[i].classList.remove('hint'), 950);
+  const [r, c] = idxRC(i);
+  sys('pista inyectada · fila ' + (r + 1) + ' · columna ' + (c + 1) + ' = ' + SOLU[i], 'ok');
+  checkWin();
+}
+
+/* =========================================================
+   4 · REVELACIÓN — los números del sudoku se vuelven el saludo
+   ========================================================= */
+function spawnChips(sources, targets, digits) {
+  const debris = $('#debris');
+  targets.forEach((t, i) => {
+    const s = sources[i % sources.length];
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.textContent = digits[i] || randDigit();
+    chip.style.left = (s.x) + 'px';
+    chip.style.top = (s.y) + 'px';
+    debris.appendChild(chip);
+    const dx = t.x - s.x, dy = t.y - s.y;
+    const anim = chip.animate([
+      { transform: 'translate(-50%,-50%) scale(1)', opacity: 0 },
+      { transform: 'translate(-50%,-50%) scale(1.25)', opacity: 1, offset: 0.12 },
+      { transform: 'translate(calc(-50% + ' + (dx * 0.55) + 'px), calc(-50% + ' + (dy * 0.45 - 70) + 'px)) scale(1.1)', opacity: 1, offset: 0.58 },
+      { transform: 'translate(calc(-50% + ' + dx + 'px), calc(-50% + ' + dy + 'px)) scale(.55)', opacity: 0 }
+    ], {
+      duration: 760,
+      delay: i * 46,
+      easing: 'cubic-bezier(.22,.72,.24,1)',
+      fill: 'forwards'
+    });
+    anim.onfinish = () => chip.remove();
+  });
+}
+
+async function reveal(mode) {
+  if (phase === 'reveal') return;
+  setPhase('reveal');
+
+  const module = $('#act-sudoku .module');
+  const filled = cells
+    .map((el, i) => ({ rect: el.getBoundingClientRect(), digit: values[i] }))
+    .filter((x) => x.digit);
+
+  if (mode === 'solved') {
+    updateMeter(10, 'Integridad 100 %');
+    await sys('ACCESO CONCEDIDO · defensa superada · integridad restaurada', 'ok');
+  } else {
+    updateMeter(6, 'Acceso autorizado');
+    await sys('rendición aceptada · el acceso siempre fue tuyo', 'ok');
+  }
+  await wait(420);
+
+  const act = $('#act-sudoku');
+  act.classList.add('leaving');
+  await wait(RM ? 0 : 300);
+  act.hidden = true;
+  act.classList.remove('leaving');
+
+  const revealAct = $('#act-reveal');
+  revealAct.hidden = false;
+  revealAct.classList.add('entering');
+
+  const text = '¡FELIZ CUMPLEAÑOS, CAMILA!';
+  const digits = Array.from(text, (ch, i) => (ch === ' ' ? ' ' : (filled[i] ? String(filled[i].digit) : randDigit())));
+
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const greet = $('#greet');
+
+    decode(greet, text, {
+      digits,
+      flight: RM ? 0 : 740,
+      step: RM ? 0 : 52
+    }).then(async () => {
+      await typeInto($('#reveal-sub'),
+        mode === 'solved'
+          ? 'defensa superada. el sistema entero está de tu lado hoy.'
+          : 'rendición aceptada. no hace falta ganar para que sea tu día.', 18);
+      $('#reveal-meta').textContent = mode === 'solved'
+        ? 'el mensaje estaba dentro del sudoku desde el principio'
+        : '81 celdas, un regalo, cero condiciones';
+      $('#btn-restart').hidden = false;
+      $('#btn-restart').classList.add('entering');
+    });
+
+    if (!RM) {
+      const targets = Array.from(greet.querySelectorAll('.dch')).map((el) => {
+        const r = el.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      });
+      const sources = filled.map((f) => ({ x: f.rect.left + f.rect.width / 2, y: f.rect.top + f.rect.height / 2 }));
+      if (sources.length) spawnChips(sources, targets, digits.filter((d) => d !== ' '));
+      if (module) {
+        module.animate(
+          [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(-14px) scale(.97)' }],
+          { duration: 520, delay: 300, easing: 'ease', fill: 'forwards' }
+        );
+      }
+    }
+  }));
+}
+
+function updateMeter(on, label) {
+  $('#meter').querySelectorAll('i').forEach((el, i) => el.classList.toggle('on', i < on));
+  $('#integrity-label').textContent = label;
+}
+
+/* =========================================================
+   5 · FLUJO
+   ========================================================= */
+async function openPuzzle() {
+  const alertAct = $('#act-alert');
+  alertAct.classList.add('leaving');
+  await wait(RM ? 0 : 300);
+  alertAct.hidden = true;
+  alertAct.classList.remove('leaving');
+
+  const act = $('#act-sudoku');
+  act.hidden = false;
+  act.classList.add('entering');
+  setPhase('puzzle');
+  buildGrid();
+  buildPad();
+  updateMeter(3, 'Integridad 30 %');
+  focusCell(firstEmpty());
+  await sys('módulo de defensa en línea · elige una celda y teclea un dígito');
+}
+
+async function run() {
+  setPhase('boot');
+  const lines = Array.from(document.querySelectorAll('#console p'));
+  for (const p of lines) {
+    await typeInto(p, p.dataset.type, 26);
+    p.classList.add('done');
+    await wait(240);
+  }
+  await wait(420);
+  setPhase('alert');
+  await decode($('#alert-title'), 'HAS SIDO HACKEADA', { duration: 1250 });
+  await typeInto($('#alert-sub'), 'resuelve el sudoku para protegerte del hackeo', 20);
+  $('#skip').hidden = true;
+  await wait(1200);
+  openPuzzle();
+}
+
+/* =========================================================
+   6 · EVENTOS
+   ========================================================= */
+function onKey(e) {
+  if ((phase === 'boot' || phase === 'alert') && (e.key === 'Enter' || e.key === ' ')) {
+    fast = true;
+    return;
+  }
+  if (phase !== 'puzzle') return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key >= '1' && e.key <= '9') {
+    if (active >= 0) { e.preventDefault(); place(active, Number(e.key)); }
+    return;
+  }
+  if (e.key === 'Backspace' || e.key === 'Delete' || e.key === '0') {
+    if (active >= 0 && PUZZLE[active] === '0') { e.preventDefault(); place(active, 0); }
+    return;
+  }
+  if (active < 0) return;
+  const [r, c] = idxRC(active);
+  const moves = { ArrowUp: [r - 1, c], ArrowDown: [r + 1, c], ArrowLeft: [r, c - 1], ArrowRight: [r, c + 1] };
+  if (moves[e.key]) {
+    e.preventDefault();
+    const [nr, nc] = moves[e.key];
+    if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) focusCell(nr * 9 + nc);
+  }
+}
+
+function bind() {
+  document.addEventListener('pointerdown', () => {
+    if (phase === 'boot' || phase === 'alert') { fast = true; $('#skip').hidden = true; }
+  }, { passive: true });
+
+  document.addEventListener('keydown', onKey);
+
+  $('#grid').addEventListener('click', (e) => {
+    const b = e.target.closest('.cell');
+    if (b) focusCell(Number(b.dataset.i));
+  });
+
+  $('#pad').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (b && active >= 0) place(active, Number(b.dataset.d));
+  });
+
+  $('#btn-clear').addEventListener('click', () => { if (active >= 0) place(active, 0); });
+
+  $('#btn-hint').addEventListener('click', giveHint);
+
+  $('#btn-quit').addEventListener('click', () => {
+    if (!quitArmed) {
+      quitArmed = true;
+      $('#btn-quit').textContent = '¿Seguro?';
+      $('#btn-quit').classList.add('armed');
+      quitTimer = setTimeout(() => {
+        quitArmed = false;
+        $('#btn-quit').textContent = 'Rendirse';
+        $('#btn-quit').classList.remove('armed');
+      }, 3200);
+      return;
+    }
+    clearTimeout(quitTimer);
+    $('#btn-quit').disabled = true;
+    reveal('quit');
+  });
+
+  $('#btn-restart').addEventListener('click', () => window.location.reload());
+}
+
+/* =========================================================
+   7 · ARRANQUE
+   ========================================================= */
+startRain();
+tickClock();
+setInterval(tickClock, 1000);
+bind();
+run();
+
+})();
+</script>
+</body>
+</html>
